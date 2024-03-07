@@ -9,6 +9,14 @@ from hummingbot.core.data_type.order_candidate import OrderCandidate
 from hummingbot.core.event.events import OrderFilledEvent
 from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
 
+def no_format(x):
+    return x
+
+def format_3digits(x):
+    return f"{x:,.3f}"
+
+def format_4digits(x):
+    return f"{x:,.4f}"    
 
 class SimpleArbitrage(ScriptStrategyBase):
     """
@@ -19,9 +27,9 @@ class SimpleArbitrage(ScriptStrategyBase):
     A simplified version of Hummingbot arbitrage strategy, this bot checks the Volume Weighted Average Price for
     bid and ask in two exchanges and if it finds a profitable opportunity, it will trade the tokens.
     """
-    order_amount = Decimal("0.01")  # in base asset
-    min_profitability = Decimal("0.002")  # in percentage
-    base = "RITE"
+    order_amount = Decimal("1000")  # in base asset
+    min_profitability = Decimal("0.8")  # in percentage
+    base = "INSP"
     quote = "USDT"
     trading_pair = f"{base}-{quote}"
     exchange_A = "mexc"
@@ -164,21 +172,24 @@ class SimpleArbitrage(ScriptStrategyBase):
         warning_lines.extend(self.network_warning(self.get_market_trading_pair_tuples()))
 
         balance_df = self.get_balance_df()
-        lines.extend(["", "  Balances:"] + ["    " + line for line in balance_df.to_string(index=False).split("\n")])
+        lines.extend(["", "  Balances:"] + ["    " + line for line in balance_df.to_string(
+                                                                    index = False,
+                                                                    formatters = [no_format, no_format, format_3digits, format_3digits]).split("\n")])
 
         vwap_prices = self.get_vwap_prices_for_amount(self.order_amount)
         lines.extend(["", "  VWAP Prices for amount"] + ["     " + line for line in
-                                                         pd.DataFrame(vwap_prices).to_string().split("\n")])
+                                                         pd.DataFrame(vwap_prices).to_string(
+                                                         formatters=[format_3digits,format_3digits]).split("\n")])
         profitability_analysis = self.get_profitability_analysis(vwap_prices)
         lines.extend(["", "  Profitability (%)"] + [
             f"     Buy A: {self.exchange_A} --> Sell B: {self.exchange_B}"] + [
-            f"          Quote Diff: {profitability_analysis['buy_a_sell_b']['quote_diff']:.7f}"] + [
-            f"          Base Diff: {profitability_analysis['buy_a_sell_b']['base_diff']:.7f}"] + [
-            f"          Percentage: {profitability_analysis['buy_a_sell_b']['profitability_pct'] * 100:.4f} %"] + [
+            f"          Quote Diff: {profitability_analysis['buy_a_sell_b']['quote_diff']:.3f}"] + [
+            f"          Base Diff: {profitability_analysis['buy_a_sell_b']['base_diff']:.3f}"] + [
+            f"          Percentage: {profitability_analysis['buy_a_sell_b']['profitability_pct'] * 100:.3f} %"] + [
             f"     Buy B: {self.exchange_B} --> Sell A: {self.exchange_A}"] + [
-            f"          Quote Diff: {profitability_analysis['buy_b_sell_a']['quote_diff']:.7f}"] + [
-            f"          Base Diff: {profitability_analysis['buy_b_sell_a']['base_diff']:.7f}"] + [
-            f"          Percentage: {profitability_analysis['buy_b_sell_a']['profitability_pct'] * 100:.4f} %"
+            f"          Quote Diff: {profitability_analysis['buy_b_sell_a']['quote_diff']:.3f}"] + [
+            f"          Base Diff: {profitability_analysis['buy_b_sell_a']['base_diff']:.3f}"] + [
+            f"          Percentage: {profitability_analysis['buy_b_sell_a']['profitability_pct'] * 100:.3f} %"
         ])
 
         warning_lines.extend(self.balance_warning(self.get_market_trading_pair_tuples()))
