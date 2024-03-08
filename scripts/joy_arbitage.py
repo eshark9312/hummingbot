@@ -1,6 +1,8 @@
 import logging
 from decimal import Decimal
 from typing import Any, Dict
+import time
+from datetime import datetime
 
 import pandas as pd
 
@@ -34,22 +36,33 @@ class SimpleArbitrage(ScriptStrategyBase):
     trading_pair = f"{base}-{quote}"
     exchange_A = "mexc"
     exchange_B = "gate_io"
+    arb_threshold = 0.3                 # threshold for take profit in percentage
+    duration_threshold = 0.3            # threshold for duration of arb_opportunity to capture
 
-    markets = {exchange_A: {trading_pair},
-               exchange_B: {trading_pair}}
+    quote_amount = 100
+    base_assets = ["BBL", "SUI", "RITE", "INSP"]
+    markets_set = {f"{base}-USDT" for base in base_assets}
+    markets = {"mexc": markets_set,
+               "gate_io": markets_set}
+
+    opportunity_ts = {base: {"buy_a_sell_b": 0, "profit_a_b" : 0,
+                             "buy_b_sell_a": 0, "profit_b_a" : 0} for base in base_assets}
+    
 
     def on_tick(self):
-        vwap_prices = self.get_vwap_prices_for_amount(self.order_amount)
-        proposal = self.check_profitability_and_create_proposal(vwap_prices)
-        if len(proposal) > 0:
-            proposal_adjusted: Dict[str, OrderCandidate] = self.adjust_proposal_to_budget(proposal)
-            # self.place_orders(proposal_adjusted)
+        pass
+        # vwap_prices = self.get_vwap_prices_for_amount(self.order_amount)
+        # proposal = self.check_profitability_and_create_proposal(vwap_prices)
+        # if len(proposal) > 0:
+        #     proposal_adjusted: Dict[str, OrderCandidate] = self.adjust_proposal_to_budget(proposal)
+        #     # self.place_orders(proposal_adjusted)
 
-    def get_vwap_prices_for_amount(self, amount: Decimal):
-        bid_ex_a = self.connectors[self.exchange_A].get_vwap_for_volume(self.trading_pair, False, amount)
-        ask_ex_a = self.connectors[self.exchange_A].get_vwap_for_volume(self.trading_pair, True, amount)
-        bid_ex_b = self.connectors[self.exchange_B].get_vwap_for_volume(self.trading_pair, False, amount)
-        ask_ex_b = self.connectors[self.exchange_B].get_vwap_for_volume(self.trading_pair, True, amount)
+    def get_vwap_prices_for_amount(self, amount: Decimal, pair: str = ""):
+        trading_pair = self.trading_pair if pair == "" else pair
+        bid_ex_a = self.connectors[self.exchange_A].get_vwap_for_volume(trading_pair, False, amount)
+        ask_ex_a = self.connectors[self.exchange_A].get_vwap_for_volume(trading_pair, True, amount)
+        bid_ex_b = self.connectors[self.exchange_B].get_vwap_for_volume(trading_pair, False, amount)
+        ask_ex_b = self.connectors[self.exchange_B].get_vwap_for_volume(trading_pair, True, amount)
         vwap_prices = {
             self.exchange_A: {
                 "bid": bid_ex_a.result_price,
@@ -62,11 +75,11 @@ class SimpleArbitrage(ScriptStrategyBase):
         }
         return vwap_prices
 
-    def get_fees_percentages(self, vwap_prices: Dict[str, Any]) -> Dict:
+    def get_fees_percentages(self, vwap_prices: Dict[str, Any], base: str = "", quote: str = "") -> Dict:
         # We assume that the fee percentage for buying or selling is the same
         a_fee = self.connectors[self.exchange_A].get_fee(
-            base_currency=self.base,
-            quote_currency=self.quote,
+            base_currency=self.base if base == "" else base,
+            quote_currency=self.quote if quote == "" else quote,
             order_type=OrderType.MARKET,
             order_side=TradeType.BUY,
             amount=self.order_amount,
@@ -75,8 +88,8 @@ class SimpleArbitrage(ScriptStrategyBase):
         ).percent
 
         b_fee = self.connectors[self.exchange_B].get_fee(
-            base_currency=self.base,
-            quote_currency=self.quote,
+            base_currency=self.base if base == "" else base,
+            quote_currency=self.base if base == "" else base,
             order_type=OrderType.MARKET,
             order_side=TradeType.BUY,
             amount=self.order_amount,
@@ -89,8 +102,8 @@ class SimpleArbitrage(ScriptStrategyBase):
             self.exchange_B: b_fee
         }
 
-    def get_profitability_analysis(self, vwap_prices: Dict[str, Any]) -> Dict:
-        fees = self.get_fees_percentages(vwap_prices)
+    def get_profitability_analysis(self, vwap_prices: Dict[str, Any], base: str = "") -> Dict:
+        fees = self.get_fees_percentages(vwap_prices = vwap_prices, base = base)
         buy_a_sell_b_quote = vwap_prices[self.exchange_B]["bid"] * (1 - fees[self.exchange_B]) * self.order_amount - \
             vwap_prices[self.exchange_A]["ask"] * (1 + fees[self.exchange_A]) * self.order_amount
         buy_a_sell_b_base = buy_a_sell_b_quote / (
@@ -160,6 +173,49 @@ class SimpleArbitrage(ScriptStrategyBase):
             self.buy(connector_name=connector_name, trading_pair=order.trading_pair, amount=order.amount,
                      order_type=order.order_type, price=order.price)
 
+    def _update_opportunity_ts(self, base: str, profit: Decimal, is_buy_a:bool) -> str:
+        if self.opportunity_ts[base]["buy_a_sell_b" if is_buy_a else "buy_b_sell_a"] == 0:
+            if profit >= self.arb_threshold:             # start_ts of the arbitrage opportunity
+                self.opportunity_ts[base]["buy_a_sell_b" if is_buy_a else "buy_b_sell_a"] = time.time()
+                self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"] = profit
+            return ""
+        else:
+            duration = time.time() - self.opportunity_ts[base]["buy_a_sell_b" if is_buy_a else "buy_b_sell_a"]
+            if profit > self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"]:
+                self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"] = profit
+            if profit < self.arb_threshold:             # end_ts of the arbitrage opportunity
+                self.opportunity_ts[base]["buy_a_sell_b" if is_buy_a else "buy_b_sell_a"] = 0
+                max_profit = self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"]
+                self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"] = 0
+                if duration > 0.3:
+                    info_msg = f"{base} : {self.exchange_A} -> {self.exchange_B} {max_profit:.2f} % ({duration:.1f})" if is_buy_a else \
+                               f"{base} : {self.exchange_B} -> {self.exchange_A} {max_profit:.2f} % ({duration:.1f})"
+                    self.logger().info(info_msg)
+            return f"({duration:.1f})"
+
+    def batch_arb_profit_analysis_df(self):
+        columns = self.base_assets.copy()
+        columns.insert(0,"BUY -> SELL")
+        buy_a_sell_b = [f"{self.exchange_A} -> {self.exchange_B}"]
+        buy_b_sell_a = [f"{self.exchange_B} -> {self.exchange_A}"]
+        for base in self.base_assets:
+            trading_pair = f"{base}-USDT"
+            order_amount = self.quote_amount / self.connectors[self.exchange_A].get_mid_price(trading_pair = trading_pair)
+            vwap_prices = self.get_vwap_prices_for_amount(amount = self.quote_amount, pair = trading_pair)
+            profitability_analysis = self.get_profitability_analysis(vwap_prices = vwap_prices, base = base)
+            buy_a_sell_b_profit = profitability_analysis['buy_a_sell_b']['profitability_pct'] * 100
+            buy_a_sell_b_duration = self._update_opportunity_ts(base = base,
+                                                                profit = buy_a_sell_b_profit,
+                                                                is_buy_a = True)
+            buy_b_sell_a_profit = profitability_analysis['buy_b_sell_a']['profitability_pct'] * 100
+            buy_b_sell_a_duration = self._update_opportunity_ts(base = base,
+                                                                profit = buy_b_sell_a_profit,
+                                                                is_buy_a = False)
+            buy_a_sell_b.append(f"{buy_a_sell_b_profit:.2f}{buy_a_sell_b_duration}")
+            buy_b_sell_a.append(f"{buy_b_sell_a_profit:.2f}{buy_b_sell_a_duration}")
+        df = pd.DataFrame(data = [buy_a_sell_b, buy_b_sell_a], columns = columns)
+        return df
+
     def format_status(self) -> str:
         """
         Returns status of the current strategy on user balances and current active orders. This function is called
@@ -171,30 +227,18 @@ class SimpleArbitrage(ScriptStrategyBase):
         warning_lines = []
         warning_lines.extend(self.network_warning(self.get_market_trading_pair_tuples()))
 
-        balance_df = self.get_balance_df()
-        lines.extend(["", "  Balances:"] + ["    " + line for line in balance_df.to_string(
-                                                                    index = False,
-                                                                    formatters = [no_format, no_format, format_3digits, format_3digits]).split("\n")])
-
-        vwap_prices = self.get_vwap_prices_for_amount(self.order_amount)
-        lines.extend(["", "  VWAP Prices for amount"] + ["     " + line for line in
-                                                         pd.DataFrame(vwap_prices).to_string(
-                                                         formatters=[format_3digits,format_3digits]).split("\n")])
-        profitability_analysis = self.get_profitability_analysis(vwap_prices)
-        lines.extend(["", "  Profitability (%)"] + [
-            f"     Buy A: {self.exchange_A} --> Sell B: {self.exchange_B}"] + [
-            f"          Quote Diff: {profitability_analysis['buy_a_sell_b']['quote_diff']:.3f}"] + [
-            f"          Base Diff: {profitability_analysis['buy_a_sell_b']['base_diff']:.3f}"] + [
-            f"          Percentage: {profitability_analysis['buy_a_sell_b']['profitability_pct'] * 100:.3f} %"] + [
-            f"     Buy B: {self.exchange_B} --> Sell A: {self.exchange_A}"] + [
-            f"          Quote Diff: {profitability_analysis['buy_b_sell_a']['quote_diff']:.3f}"] + [
-            f"          Base Diff: {profitability_analysis['buy_b_sell_a']['base_diff']:.3f}"] + [
-            f"          Percentage: {profitability_analysis['buy_b_sell_a']['profitability_pct'] * 100:.3f} %"
-        ])
+        # balance_df = self.get_balance_df()
+        # lines.extend(["", "  Balances:"] + ["    " + line for line in balance_df.to_string(
+        #                                                             index = False,
+        #                                                             formatters = [no_format, no_format, format_3digits, format_3digits]).split("\n")])
+        batch_analysis_df = self.batch_arb_profit_analysis_df()
+        lines.extend(["", "  Arbitrage Opportunity:"] + \
+                     ["    " + line for line in batch_analysis_df.to_string(index = False).split("\n")])
+        
 
         warning_lines.extend(self.balance_warning(self.get_market_trading_pair_tuples()))
-        if len(warning_lines) > 0:
-            lines.extend(["", "*** WARNINGS ***"] + warning_lines)
+        # if len(warning_lines) > 0:
+        #     lines.extend(["", "*** WARNINGS ***"] + warning_lines)
         return "\n".join(lines)
 
     def did_fill_order(self, event: OrderFilledEvent):
