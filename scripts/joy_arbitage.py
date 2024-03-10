@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Any, Dict
 import time
 from datetime import datetime
+import sqlite3
 
 import pandas as pd
 
@@ -40,7 +41,7 @@ class SimpleArbitrage(ScriptStrategyBase):
     duration_threshold = 0.3            # threshold for duration of arb_opportunity to capture
 
     quote_amount = 100
-    base_assets = ["BBL", "SUI", "RITE", "INSP"]
+    base_assets = ["BBL", "SUI", "RITE", "INSP", "CLORE"]        
     markets_set = {f"{base}-USDT" for base in base_assets}
     markets = {"mexc": markets_set,
                "gate_io": markets_set}
@@ -48,6 +49,20 @@ class SimpleArbitrage(ScriptStrategyBase):
     opportunity_ts = {base: {"buy_a_sell_b": 0, "profit_a_b" : 0,
                              "buy_b_sell_a": 0, "profit_b_a" : 0} for base in base_assets}
     
+    sqlite_conn = sqlite3.connect('arb_opportunity_log.db')
+    # initialize the db
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS brics_log (
+                        datetime DATETIME,
+                        coin TEXT,
+                        buy TEXT,
+                        sell TEXT,
+                        buy_price REAL,
+                        sell_price REAL,
+                        profit REAL,
+                        duration REAL
+                    )''')
+    sqlite_conn.commit()
 
     def on_tick(self):
         pass
@@ -173,7 +188,7 @@ class SimpleArbitrage(ScriptStrategyBase):
             self.buy(connector_name=connector_name, trading_pair=order.trading_pair, amount=order.amount,
                      order_type=order.order_type, price=order.price)
 
-    def _update_opportunity_ts(self, base: str, profit: Decimal, is_buy_a:bool) -> str:
+    def _update_opportunity_ts(self, base: str, profit: Decimal, is_buy_a:bool, vwap_prices: Dict[str, Any]) -> str:
         if self.opportunity_ts[base]["buy_a_sell_b" if is_buy_a else "buy_b_sell_a"] == 0:
             if profit >= self.arb_threshold:             # start_ts of the arbitrage opportunity
                 self.opportunity_ts[base]["buy_a_sell_b" if is_buy_a else "buy_b_sell_a"] = time.time()
@@ -188,10 +203,33 @@ class SimpleArbitrage(ScriptStrategyBase):
                 max_profit = self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"]
                 self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"] = 0
                 if duration > 0.3:
+                    data = {"datetime": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            "coin": base,
+                            "buy": self.exchange_A if is_buy_a else self.except_B,
+                            "sell": self.exchange_B if is_buy_a else self.except_A,
+                            "buy_price": vwap_prices[self.exchange_A]["ask"] if is_buy_a else vwap_prices[self.exchange_B]["ask"],
+                            "sell_price": vwap_prices[self.exchange_B]["bid"] if is_buy_a else vwap_prices[self.exchange_A]["bid"],
+                            "profit": f"{max_profit:.2f}",
+                            "duration": f"{duration:.1f}"}
+                    self._log_orb_opportunity_sqlite(data)
                     info_msg = f"{base} : {self.exchange_A} -> {self.exchange_B} {max_profit:.2f} % ({duration:.1f})" if is_buy_a else \
                                f"{base} : {self.exchange_B} -> {self.exchange_A} {max_profit:.2f} % ({duration:.1f})"
                     self.logger().info(info_msg)
             return f"({duration:.1f})"
+
+    def _log_orb_opportunity_sqlite(self, data: Dict[str, Any]):
+        self.cursor.execute('''INSERT INTO brics_log (
+                            datetime, coin, buy, sell, buy_price, sell_price, profit, duration
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                            data['datetime'],
+                            data['coin'],
+                            data['buy'],
+                            data['sell'],
+                            data['buy_price'],
+                            data['sell_price'],
+                            data['profit'],
+                            data['duration']))
+        self.sqlite_conn.commit()
 
     def batch_arb_profit_analysis_df(self):
         columns = self.base_assets.copy()
@@ -206,10 +244,12 @@ class SimpleArbitrage(ScriptStrategyBase):
             buy_a_sell_b_profit = profitability_analysis['buy_a_sell_b']['profitability_pct'] * 100
             buy_a_sell_b_duration = self._update_opportunity_ts(base = base,
                                                                 profit = buy_a_sell_b_profit,
+                                                                vwap_prices = vwap_prices,
                                                                 is_buy_a = True)
             buy_b_sell_a_profit = profitability_analysis['buy_b_sell_a']['profitability_pct'] * 100
             buy_b_sell_a_duration = self._update_opportunity_ts(base = base,
                                                                 profit = buy_b_sell_a_profit,
+                                                                vwap_prices = vwap_prices,
                                                                 is_buy_a = False)
             buy_a_sell_b.append(f"{buy_a_sell_b_profit:.2f}{buy_a_sell_b_duration}")
             buy_b_sell_a.append(f"{buy_b_sell_a_profit:.2f}{buy_b_sell_a_duration}")
