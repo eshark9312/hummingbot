@@ -49,10 +49,10 @@ class SimpleArbitrage(ScriptStrategyBase):
     opportunity_ts = {base: {"buy_a_sell_b": 0, "profit_a_b" : 0,
                              "buy_b_sell_a": 0, "profit_b_a" : 0} for base in base_assets}
     
-    sqlite_conn = sqlite3.connect('arb_opportunity_log.db')
+    sqlite_conn = sqlite3.connect('opportunity_log.db')
     # initialize the db
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS brics_log (
+    cursor = sqlite_conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS bbl_sui_rite_insp_clore_log (
                         datetime DATETIME,
                         coin TEXT,
                         buy TEXT,
@@ -202,13 +202,15 @@ class SimpleArbitrage(ScriptStrategyBase):
                 self.opportunity_ts[base]["buy_a_sell_b" if is_buy_a else "buy_b_sell_a"] = 0
                 max_profit = self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"]
                 self.opportunity_ts[base]["profit_a_b" if is_buy_a else "profit_b_a"] = 0
-                if duration > 0.3:
+                if duration > 0.3:                      # log opportunity into sqlite3db and hb_logs
+                    buy_price = vwap_prices[self.exchange_A]["ask"] if is_buy_a else vwap_prices[self.exchange_B]["ask"]
+                    sell_price = vwap_prices[self.exchange_B]["bid"] if is_buy_a else vwap_prices[self.exchange_A]["bid"]
                     data = {"datetime": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                             "coin": base,
-                            "buy": self.exchange_A if is_buy_a else self.except_B,
-                            "sell": self.exchange_B if is_buy_a else self.except_A,
-                            "buy_price": vwap_prices[self.exchange_A]["ask"] if is_buy_a else vwap_prices[self.exchange_B]["ask"],
-                            "sell_price": vwap_prices[self.exchange_B]["bid"] if is_buy_a else vwap_prices[self.exchange_A]["bid"],
+                            "buy": self.exchange_A if is_buy_a else self.exchange_B,
+                            "sell": self.exchange_B if is_buy_a else self.exchange_A,
+                            "buy_price": f"{buy_price:.4f}",
+                            "sell_price": f"{sell_price:.4f}",
                             "profit": f"{max_profit:.2f}",
                             "duration": f"{duration:.1f}"}
                     self._log_orb_opportunity_sqlite(data)
