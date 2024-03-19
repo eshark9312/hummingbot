@@ -36,15 +36,15 @@ class SimpleArbitrage(ScriptStrategyBase):
     quote = "USDT"
     trading_pair = f"{base}-{quote}"
     exchange_A = "mexc"
-    exchange_B = "gate_io"
+    exchange_B = "kucoin"
     arb_threshold = 0.3                 # threshold for take profit in percentage
     duration_threshold = 0.3            # threshold for duration of arb_opportunity to capture
 
     quote_amount = 100
-    base_assets = ["BBL", "JOYSTREAM", "RITE", "MYRO", "CLORE"]        
+    base_assets = ["EGO", "MYRO"]        
     markets_set = {f"{base}-USDT" for base in base_assets}
-    markets = {"mexc": markets_set,
-               "gate_io": markets_set}
+    markets = {exchange_A: markets_set,
+               exchange_B: markets_set}
 
     opportunity_ts = {base: {"buy_a_sell_b": 0, "profit_a_b" : 0,
                              "buy_b_sell_a": 0, "profit_b_a" : 0,
