@@ -42,10 +42,6 @@ class SimpleArbitrage(ScriptStrategyBase):
                "kucoin": {"EGO-USDT", "KAS-USDT", "CELR-USDT", "SUIP-USDT", "TARA-USDT", "ALEPH-USDT"},
                "gate_io": {"KAS-USDT", "CELR-USDT", "SUIP-USDT", "TARA-USDT", "ALEPH-USDT", "ML-USDT"},
                "binance": {"CELR-USDT"}}
-    # markets = {"mexc": {"EGO-USDT", "KAS-USDT", "SUIP-USDT", "TARA-USDT", "NIBIRU-USDT", "CELR-USDT", "ALEPH-USDT", "ML-USDT"},
-    #            "kucoin": {"EGO-USDT", "KAS-USDT", "SUIP-USDT", "TARA-USDT", "NIBIRU-USDT", "CELR-USDT", "ALEPH-USDT"},
-    #            "gate_io": {"KAS-USDT", "SUIP-USDT", "TARA-USDT", "NIBIRU-USDT", "CELR-USDT", "ALEPH-USDT", "ML-USDT"},
-    #            "binance": {"CELR-USDT"}}
     opportunity_ts = {f"{base}-USDT": {} for base in base_assets}
     
     sqlite_conn = sqlite3.connect('opportunity_log.db')
