@@ -96,7 +96,7 @@ class HtxExchange(ExchangePyBase):
         return self._trading_required
 
     def supported_order_types(self):
-        return [OrderType.LIMIT, OrderType.LIMIT_MAKER]
+        return [OrderType.LIMIT, OrderType.LIMIT_MAKER, OrderType.MARKET]
 
     def get_fee(
         self,
@@ -397,18 +397,21 @@ class HtxExchange(ExchangePyBase):
         path_url = CONSTANTS.PLACE_ORDER_URL
         side = trade_type.name.lower()
         order_type_str = "limit" if order_type is OrderType.LIMIT else "limit-maker"
+        if order_type is OrderType.MARKET:
+            order_type_str = "market"
         if not self._account_id:
             await self._update_account_id()
         exchange_symbol = await self.exchange_symbol_associated_to_pair(trading_pair)
+        quote_amount = amount * price
         params = {
             "account-id": self._account_id,
-            "amount": f"{amount}",
+            "amount": f"{amount if side == 'sell' else quote_amount:.2f}",
             "client-order-id": order_id,
             "symbol": exchange_symbol,
             "type": f"{side}-{order_type_str}",
         }
         if order_type is OrderType.LIMIT or order_type is OrderType.LIMIT_MAKER:
-            params["price"] = f"{price}"
+            params["price"] = f"{price:.2f}"
         creation_response = await self._api_post(path_url=path_url, params=params, data=params, is_auth_required=True)
 
         if (
