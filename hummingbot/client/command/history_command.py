@@ -3,7 +3,7 @@ import threading
 import time
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, List, Optional, Set, Tuple, Dict, Any
 
 import pandas as pd
 
@@ -51,7 +51,7 @@ class HistoryCommand:
                 return
             if verbose:
                 self.list_trades(start_time)
-            safe_ensure_future(self.history_report(start_time, trades, precision))
+            return safe_ensure_future(self.history_report(start_time, trades, precision))
 
     def get_history_trades_json(self,  # type: HummingbotApplication
                                 days: float = 0):
@@ -89,12 +89,64 @@ class HistoryCommand:
                 raise
             perf = await PerformanceMetrics.create(symbol, cur_trades, cur_balances)
             if display_report:
-                perf_metrics[symbol][market] = self.report_performance_by_market(market, symbol, perf, precision)
+                self.report_performance_by_market(market, symbol, perf, precision)
+            perf_metrics[symbol][market] = self.get_trades_perf_summary(perf = perf, precision = precision)
             return_pcts.append(perf.return_pct)
 
         avg_return = sum(return_pcts) / len(return_pcts) if len(return_pcts) > 0 else s_decimal_0
         if display_report and len(return_pcts) > 1:
             self.notify(f"\nAveraged Return = {avg_return:.2%}")
+        
+        # summarize the trading performance
+        perf_summary_str = self.report_perf_summary(perf_metrics)
+        if display_report:
+            self.notify(perf_summary_str)
+            self.logger().info(perf_summary_str)
+            
+        return perf_summary_str
+
+    async def get_current_balances(self,  # type: HummingbotApplication
+                                   market: str):
+        if market in self.markets and self.markets[market].ready:
+            return self.markets[market].get_all_balances()
+        elif "Paper" in market:
+            paper_balances = self.client_config_map.paper_trade.paper_trade_account_balance
+            if paper_balances is None:
+                return {}
+            return {token: Decimal(str(bal)) for token, bal in paper_balances.items()}
+        else:
+            if UserBalances.instance().is_gateway_market(market):
+                await GatewayCommand.update_exchange_balances(self, market, self.client_config_map)
+                return GatewayCommand.all_balance(self, market)
+            else:
+                await UserBalances.instance().update_exchange_balance(market, self.client_config_map)
+                return UserBalances.instance().all_balances(market)
+
+    def report_header(self,  # type: HummingbotApplication
+                      start_time: float):
+        lines = []
+        current_time = get_timestamp()
+        lines.extend(
+            [f"\nStart Time: {datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')}"] +
+            [f"Current Time: {datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"] +
+            [f"Duration: {pd.Timedelta(seconds=int(current_time - start_time))}"]
+        )
+        self.notify("\n".join(lines))
+
+    def get_trades_perf_summary(self, # type: HummingbotApplication
+                                perf: PerformanceMetrics,
+                                precision: int):
+        trades_summary = {"buy": PerformanceMetrics.smart_round(perf.b_vol_base, precision),
+                         "sell": PerformanceMetrics.smart_round(perf.s_vol_base, precision),
+                     "buy_usdt": PerformanceMetrics.smart_round(perf.b_vol_quote, precision),
+                    "sell_usdt": PerformanceMetrics.smart_round(perf.s_vol_quote, precision),
+                         "fees": [(PerformanceMetrics.smart_round(fee_amount, precision), fee_token) for fee_token, fee_amount in perf.fees.items()],
+                 "fee_in_quote": perf.fee_in_quote,
+                    "cur_price": perf.cur_price}
+        return trades_summary
+
+    def report_perf_summary(self, # type: HummingbotApplication
+                            perf_metrics: Dict[str, Any]):
         # summarize the trading performance
         self.notify("\n  Performance Summary \n")
         perf_disp_lines = []
@@ -130,36 +182,7 @@ class HistoryCommand:
 
             perf_df = pd.DataFrame(data = perf_data, columns = perf_columns)
             perf_disp_lines.extend(["", symbol] + ["    " + line for line in perf_df.to_string(index=False).split("\n")])
-        self.notify("\n".join(perf_disp_lines))
-        return avg_return
-
-    async def get_current_balances(self,  # type: HummingbotApplication
-                                   market: str):
-        if market in self.markets and self.markets[market].ready:
-            return self.markets[market].get_all_balances()
-        elif "Paper" in market:
-            paper_balances = self.client_config_map.paper_trade.paper_trade_account_balance
-            if paper_balances is None:
-                return {}
-            return {token: Decimal(str(bal)) for token, bal in paper_balances.items()}
-        else:
-            if UserBalances.instance().is_gateway_market(market):
-                await GatewayCommand.update_exchange_balances(self, market, self.client_config_map)
-                return GatewayCommand.all_balance(self, market)
-            else:
-                await UserBalances.instance().update_exchange_balance(market, self.client_config_map)
-                return UserBalances.instance().all_balances(market)
-
-    def report_header(self,  # type: HummingbotApplication
-                      start_time: float):
-        lines = []
-        current_time = get_timestamp()
-        lines.extend(
-            [f"\nStart Time: {datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')}"] +
-            [f"Current Time: {datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}"] +
-            [f"Duration: {pd.Timedelta(seconds=int(current_time - start_time))}"]
-        )
-        self.notify("\n".join(lines))
+        return "\n".join(perf_disp_lines)
 
     def report_performance_by_market(self,  # type: HummingbotApplication
                                      market: str,
@@ -167,13 +190,6 @@ class HistoryCommand:
                                      perf: PerformanceMetrics,
                                      precision: int):
         lines = []
-        trades_summary = {"buy": PerformanceMetrics.smart_round(perf.b_vol_base, precision),
-                         "sell": PerformanceMetrics.smart_round(perf.s_vol_base, precision),
-                     "buy_usdt": PerformanceMetrics.smart_round(perf.b_vol_quote, precision),
-                    "sell_usdt": PerformanceMetrics.smart_round(perf.s_vol_quote, precision),
-                         "fees": [(PerformanceMetrics.smart_round(fee_amount, precision), fee_token) for fee_token, fee_amount in perf.fees.items()],
-                 "fee_in_quote": perf.fee_in_quote,
-                    "cur_price": perf.cur_price}
         base, quote = trading_pair.split("-")
         lines.extend(
             [f"\n{market} / {trading_pair}"]
@@ -240,7 +256,6 @@ class HistoryCommand:
                      ["    " + line for line in perf_df.to_string(index=False, header=False).split("\n")])
 
         self.notify("\n".join(lines))
-        return trades_summary
 
     async def calculate_profitability(self,  # type: HummingbotApplication
                                       ) -> Decimal:
