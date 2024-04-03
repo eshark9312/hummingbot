@@ -155,7 +155,7 @@ class SimpleArbitrage(ScriptStrategyBase):
             buy_price = self.connectors[exchange].get_price_for_volume(is_buy=True,
                                                 volume=corr_base_amount * Decimal(1.2),
                                                 trading_pair=pair).result_price
-            self.buy(amount = corr_base_amount, price = buy_price,
+            self.buy(amount = Decimal(corr_base_amount), price = buy_price,
                     connector_name = exchange,
                     order_type = OrderType.LIMIT,
                     trading_pair = pair)
@@ -163,17 +163,19 @@ class SimpleArbitrage(ScriptStrategyBase):
             sell_price = self.connectors[exchange].get_price_for_volume(is_buy=False,
                                                 volume=corr_base_amount * Decimal(1.2),
                                                 trading_pair=pair).result_price
-            self.sell(amount = corr_base_amount, price = sell_price,
+            self.sell(amount = Decimal(corr_base_amount), price = sell_price,
                      connector_name = exchange,
                      order_type = OrderType.LIMIT,
                      trading_pair = pair)
 
     def _place_orders(self, base_amount: Decimal, exchange_buy: str, exchange_sell: str, pair:str):
-        buy_price = self.connectors[exchange_buy].get_price_for_volume(is_buy=True,
-                                                volume=base_amount * Decimal(1.2),
+        buy_price = Decimal(1.001) * self.connectors[exchange_buy].get_price_for_volume(
+                                                is_buy=True,
+                                                volume=base_amount,
                                                 trading_pair=pair).result_price
-        sell_price = self.connectors[exchange_sell].get_price_for_volume(is_buy=False,
-                                                volume=base_amount * Decimal(1.2),
+        sell_price = Decimal(0.999) * self.connectors[exchange_sell].get_price_for_volume(
+                                                is_buy=False,
+                                                volume=base_amount,
                                                 trading_pair=pair).result_price
         
         orders = {"buy_order": {"exchange": exchange_buy}, 
@@ -329,6 +331,29 @@ class SimpleArbitrage(ScriptStrategyBase):
                 "tot_base_balance": tot_base_balance,
                 "tot_quote_balance": tot_quote_balance}
 
+    def active_orders_df(self) -> pd.DataFrame:
+        """
+        Returns a custom data frame of all active maker orders for display purposes
+        """
+        columns = ["Exchange", "Market", "Side", "Price", "Amount", "Age"]
+        data = []
+        for connector_name, connector in self.connectors.items():
+            for order in self.get_active_orders(connector_name):
+                age_txt = "n/a" if order.age() <= 0. else pd.Timestamp(order.age(), unit='s').strftime('%H:%M:%S')
+                data.append([
+                    connector_name,
+                    order.trading_pair,
+                    "buy" if order.is_buy else "sell",
+                    float(order.price),
+                    float(order.quantity),
+                    age_txt
+                ])
+        if not data:
+            raise ValueError
+        df = pd.DataFrame(data=data, columns=columns)
+        df.sort_values(by=["Market", "Side"], inplace=True)
+        return df
+
     def format_status(self) -> str:
         """
         Returns status of the current strategy on user balances and current active orders. This function is called
@@ -357,4 +382,12 @@ class SimpleArbitrage(ScriptStrategyBase):
                                                                    f" {tot_quote_balance:9,.1f}({diff_quote_balance:9,.1f})"
             lines.extend(["", f"{header}", "-"*24 + "+" + "-"*27 + "+" + "-"*27 + "+" + "-"*27 ] + \
                      ["    " + line for line in pair_profit_analysis_df.to_string(index = False).split("\n")])
+        
+        # display dangling orders
+        try:
+            orders_df = self.active_orders_df()
+            lines.extend(["", "  Active Orders:"] + ["    " + line for line in orders_df.to_string(index=False).split("\n")])
+        except ValueError:
+            lines.extend(["", "  No active maker orders.", ""])
+        
         return "\n".join(lines)
