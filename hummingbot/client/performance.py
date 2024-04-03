@@ -254,6 +254,8 @@ class PerformanceMetrics:
             else:
                 rate_pair: str = combine_to_hb_trading_pair(fee_token, quote)
                 last_price = await RateOracle.get_instance().stored_or_live_rate(rate_pair)
+                if rate_pair == "MX-USDT":
+                    last_price = Decimal(4.2)
                 if last_price is not None:
                     self.fee_in_quote += fee_amount * last_price
                 else:

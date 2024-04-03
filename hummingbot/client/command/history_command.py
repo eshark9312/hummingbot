@@ -74,7 +74,10 @@ class HistoryCommand:
         if display_report:
             self.report_header(start_time)
         return_pcts = []
+        perf_metrics = {}
         for market, symbol in market_info:
+            if symbol not in perf_metrics:
+                perf_metrics[symbol] = {}
             cur_trades = [t for t in trades if t.market == market and t.symbol == symbol]
             network_timeout = float(self.client_config_map.commands_timeout.other_commands_timeout)
             try:
@@ -86,11 +89,48 @@ class HistoryCommand:
                 raise
             perf = await PerformanceMetrics.create(symbol, cur_trades, cur_balances)
             if display_report:
-                self.report_performance_by_market(market, symbol, perf, precision)
+                perf_metrics[symbol][market] = self.report_performance_by_market(market, symbol, perf, precision)
             return_pcts.append(perf.return_pct)
+
         avg_return = sum(return_pcts) / len(return_pcts) if len(return_pcts) > 0 else s_decimal_0
         if display_report and len(return_pcts) > 1:
             self.notify(f"\nAveraged Return = {avg_return:.2%}")
+        # summarize the trading performance
+        self.notify("\n  Performance Summary \n")
+        perf_disp_lines = []
+        diff_base = {}
+        diff_quote = {}
+        tot_fees = {}
+        tot_perf = {}
+        for symbol in perf_metrics:
+            perf_columns = ["Exchange", symbol.split('-')[0], "USDT"]
+            perf_data = []
+            diff_base[symbol] = 0
+            diff_quote[symbol] = 0
+            tot_fees[symbol] = 0
+            cur_price = 0
+            for exchange in perf_metrics[symbol]:
+                diff_base[symbol] += float(perf_metrics[symbol][exchange]['buy']) + \
+                                     float(perf_metrics[symbol][exchange]['sell'])
+                diff_quote[symbol] += float(perf_metrics[symbol][exchange]['buy_usdt']) + \
+                                      float(perf_metrics[symbol][exchange]['sell_usdt'])
+                tot_fees[symbol] -= float(perf_metrics[symbol][exchange]['fee_in_quote'])
+                cur_price = float(perf_metrics[symbol][exchange]['cur_price'])
+                perf_data.append([exchange, 
+                             f"{perf_metrics[symbol][exchange]['buy']}", 
+                             f"{perf_metrics[symbol][exchange]['buy_usdt']}"])
+                perf_data.append([exchange, 
+                             f"{perf_metrics[symbol][exchange]['sell']}", 
+                             f"{perf_metrics[symbol][exchange]['sell_usdt']}"])
+            perf_data.append(["---------", "---------", "---------"])
+            perf_data.append(["Tot_diff", diff_base[symbol], diff_quote[symbol]])
+            perf_data.append(["Tot_fee", "   *   ", tot_fees[symbol]])
+            tot_perf[symbol] = diff_base[symbol] * cur_price + diff_quote[symbol] + tot_fees[symbol]
+            perf_data.append(["Tot_perf", "   *   ", tot_perf[symbol]])
+
+            perf_df = pd.DataFrame(data = perf_data, columns = perf_columns)
+            perf_disp_lines.extend(["", symbol] + ["    " + line for line in perf_df.to_string(index=False).split("\n")])
+        self.notify("\n".join(perf_disp_lines))
         return avg_return
 
     async def get_current_balances(self,  # type: HummingbotApplication
@@ -127,6 +167,13 @@ class HistoryCommand:
                                      perf: PerformanceMetrics,
                                      precision: int):
         lines = []
+        trades_summary = {"buy": PerformanceMetrics.smart_round(perf.b_vol_base, precision),
+                         "sell": PerformanceMetrics.smart_round(perf.s_vol_base, precision),
+                     "buy_usdt": PerformanceMetrics.smart_round(perf.b_vol_quote, precision),
+                    "sell_usdt": PerformanceMetrics.smart_round(perf.s_vol_quote, precision),
+                         "fees": [(PerformanceMetrics.smart_round(fee_amount, precision), fee_token) for fee_token, fee_amount in perf.fees.items()],
+                 "fee_in_quote": perf.fee_in_quote,
+                    "cur_price": perf.cur_price}
         base, quote = trading_pair.split("-")
         lines.extend(
             [f"\n{market} / {trading_pair}"]
@@ -193,6 +240,7 @@ class HistoryCommand:
                      ["    " + line for line in perf_df.to_string(index=False, header=False).split("\n")])
 
         self.notify("\n".join(lines))
+        return trades_summary
 
     async def calculate_profitability(self,  # type: HummingbotApplication
                                       ) -> Decimal:

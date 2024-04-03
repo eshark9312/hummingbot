@@ -31,22 +31,28 @@ class SimpleArbitrage(ScriptStrategyBase):
     bid and ask in two exchanges and if it finds a profitable opportunity, it will trade the tokens.
     """
     exchanges = ["mexc", "gate_io", "kucoin", "binance", "htx"]
-    arb_threshold = {"off_balance" : 0.5, "in_balance" : 0.3}           # threshold for take profit in percentage
+    arb_threshold = {"off_balance" : 0.7, "in_balance" : 0.5}           # threshold for take profit in percentage
     duration_threshold = 0.3            # threshold for duration of arb_opportunity to capture
-    is_trade_on = False
+    is_trade_on = True
 
     quote_amount = 50
-    base_assets = ["FTM", "NIBI", "AEG", "DECHAT"]
-    markets = {"mexc": {"NIBI-USDT", "DECHAT-USDT"},
-               "kucoin": {"FTM-USDT", "NIBI-USDT", "AEG-USDT", "DECHAT-USDT"},
-               "gate_io": {"FTM-USDT", "NIBI-USDT", "AEG-USDT", "DECHAT-USDT"},
+    # base_assets = ["FTM", "NIBI", "AEG", "DECHAT"]
+    # markets = {"mexc": {"NIBI-USDT", "DECHAT-USDT"},
+    #            "kucoin": {"FTM-USDT", "NIBI-USDT", "AEG-USDT", "DECHAT-USDT"},
+    #            "gate_io": {"FTM-USDT", "NIBI-USDT", "AEG-USDT", "DECHAT-USDT"},
+    #            "binance": {"FTM-USDT"},
+    #            "htx": {"FTM-USDT", "DECHAT-USDT"}}
+    base_assets = ["JOYSTREAM", "FTM", "DECHAT", "TARA", "EGO"]
+    markets = {"mexc": {"DECHAT-USDT", "JOYSTREAM-USDT", "EGO-USDT", "TARA-USDT"},
+               "kucoin": {"FTM-USDT", "EGO-USDT", "DECHAT-USDT"},
+               "gate_io": {"FTM-USDT", "DECHAT-USDT", "JOYSTREAM-USDT", "TARA-USDT"},
                "binance": {"FTM-USDT"},
                "htx": {"FTM-USDT", "DECHAT-USDT"}}
     opportunity_ts = {f"{base}-USDT": {} for base in base_assets}
     init_tot_balance = {f"{base}-USDT": {base:0, "USDT":0} for base in base_assets}
     init_tot_balance["initialized"] = False
-    sqlite_conn = sqlite3.connect('opportunity_log.db')
-    tb_name = "bbl_sui_rite_insp_clore_log"
+    sqlite_conn = sqlite3.connect('opportunity_log_0329.db')
+    tb_name = "log_04_01"
     # initialize the db
     cursor = sqlite_conn.cursor()
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS {tb_name} (

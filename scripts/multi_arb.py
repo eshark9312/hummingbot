@@ -30,22 +30,22 @@ class SimpleArbitrage(ScriptStrategyBase):
     A simplified version of Hummingbot arbitrage strategy, this bot checks the Volume Weighted Average Price for
     bid and ask in two exchanges and if it finds a profitable opportunity, it will trade the tokens.
     """
-    order_amount = Decimal("1000")  # in base asset
-    min_profitability = Decimal("0.8")  # in percentage
-    exchanges = ["mexc", "gate_io", "kucoin", "binance"]
-    arb_threshold = 0.3                 # threshold for take profit in percentage
+    exchanges = ["mexc", "gate_io", "kucoin", "htx"]
+    arb_threshold = {"off_balance" : 0.7, "in_balance" : 0.5}           # threshold for take profit in percentage
     duration_threshold = 0.3            # threshold for duration of arb_opportunity to capture
+    is_trade_on = True
 
-    quote_amount = 100
-    base_assets = ["EGO", "KAS", "CELR", "SUIP", "TARA", "ALEPH", "ML"] #, "SUIP", "TARA", "NIBIRU", "CELR", "ALEPH", "ML"]
-    markets = {"mexc": {"EGO-USDT", "KAS-USDT", "SUIP-USDT", "TARA-USDT", "ALEPH-USDT", "ML-USDT"},
-               "kucoin": {"EGO-USDT", "KAS-USDT", "CELR-USDT", "SUIP-USDT", "TARA-USDT", "ALEPH-USDT"},
-               "gate_io": {"KAS-USDT", "CELR-USDT", "SUIP-USDT", "TARA-USDT", "ALEPH-USDT", "ML-USDT"},
-               "binance": {"CELR-USDT"}}
+    quote_amount = 50
+    base_assets = ["JOYSTREAM", "DECHAT", "TARA", "EGO"]
+    markets = {"mexc": {"MX-USDT", "DECHAT-USDT", "JOYSTREAM-USDT", "EGO-USDT", "TARA-USDT"},
+               "kucoin": {"EGO-USDT", "DECHAT-USDT"},
+               "gate_io": {"DECHAT-USDT", "JOYSTREAM-USDT", "TARA-USDT"},
+               "htx": {"DECHAT-USDT"}}
     opportunity_ts = {f"{base}-USDT": {} for base in base_assets}
-    
-    sqlite_conn = sqlite3.connect('opportunity_log.db')
-    tb_name = "bbl_sui_rite_insp_clore_log"
+    init_tot_balance = {f"{base}-USDT": {base:0, "USDT":0} for base in base_assets}
+    init_tot_balance["initialized"] = False
+    sqlite_conn = sqlite3.connect('opportunity_log_0329.db')
+    tb_name = "multi_arb_04_02"
     # initialize the db
     cursor = sqlite_conn.cursor()
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS {tb_name} (
@@ -61,12 +61,27 @@ class SimpleArbitrage(ScriptStrategyBase):
     sqlite_conn.commit()
 
     def on_tick(self):
-        pass
-        # vwap_prices = self.get_vwap_prices_for_amount(self.order_amount)
-        # proposal = self.check_profitability_and_create_proposal(vwap_prices)
-        # if len(proposal) > 0:
-        #     proposal_adjusted: Dict[str, OrderCandidate] = self.adjust_proposal_to_budget(proposal)
-        #     # self.place_orders(proposal_adjusted)
+        if not self.ready_to_trade:
+            pass
+        if self.init_tot_balance["initialized"]:
+            pass
+        else:
+            self._init_tot_balance()   
+
+    def _init_tot_balance(self):
+        for base in self.base_assets:
+            pair = f"{base}-USDT"
+            avail_exchanges = [exchange for exchange in self.exchanges if pair in self.markets[exchange]]
+            num_exchanges = len(avail_exchanges)
+            tot_base_balance = 0
+            tot_quote_balance = 0
+            for i in range(num_exchanges):
+                exchange = avail_exchanges[i]
+                tot_base_balance += self.connectors[exchange].get_balance(base)
+                tot_quote_balance += self.connectors[exchange].get_balance('USDT')
+            self.init_tot_balance[pair][base] = tot_base_balance
+            self.init_tot_balance[pair]["USDT"] = tot_quote_balance
+        self.init_tot_balance["initialized"] = True
 
     def get_vwap_prices_for_amount(self, pair: str, exchanges: list, amount: Decimal) -> Dict:
         """
@@ -93,6 +108,11 @@ class SimpleArbitrage(ScriptStrategyBase):
                             amount=amount,
                             is_maker=False
                         ).percent
+        # Correct fee rates for some exchanges manually
+        if 'mexc' in fee_rates:
+            fee_rates['mexc'] = Decimal(0.001)
+        if 'gate_io' in fee_rates:
+            fee_rates['gate_io'] = Decimal(0.001)
         return fee_rates
 
     def get_profitability_analysis(self, 
@@ -130,6 +150,72 @@ class SimpleArbitrage(ScriptStrategyBase):
                 },
         }
 
+    def _correct_base_diff(self, corr_base_amount: Decimal, exchange: str, is_buy: bool, pair: str):
+        if is_buy:
+            buy_price = self.connectors[exchange].get_price_for_volume(is_buy=True,
+                                                volume=corr_base_amount * Decimal(1.2),
+                                                trading_pair=pair).result_price
+            self.buy(amount = corr_base_amount, price = buy_price,
+                    connector_name = exchange,
+                    order_type = OrderType.LIMIT,
+                    trading_pair = pair)
+        else:
+            sell_price = self.connectors[exchange].get_price_for_volume(is_buy=False,
+                                                volume=corr_base_amount * Decimal(1.2),
+                                                trading_pair=pair).result_price
+            self.sell(amount = corr_base_amount, price = sell_price,
+                     connector_name = exchange,
+                     order_type = OrderType.LIMIT,
+                     trading_pair = pair)
+
+    def _place_orders(self, base_amount: Decimal, exchange_buy: str, exchange_sell: str, pair:str):
+        buy_price = self.connectors[exchange_buy].get_price_for_volume(is_buy=True,
+                                                volume=base_amount * Decimal(1.2),
+                                                trading_pair=pair).result_price
+        sell_price = self.connectors[exchange_sell].get_price_for_volume(is_buy=False,
+                                                volume=base_amount * Decimal(1.2),
+                                                trading_pair=pair).result_price
+        
+        orders = {"buy_order": {"exchange": exchange_buy}, 
+                  "sell_order": {"exchange": exchange_sell}}
+        orders["buy_order"]["order_id"] = self.buy(amount = base_amount, price = buy_price,
+                                                  connector_name = exchange_buy,
+                                                  order_type = OrderType.LIMIT,
+                                                  trading_pair = pair)
+        orders["sell_order"]["order_id"] = self.sell(amount = base_amount, price = sell_price,
+                                                  connector_name = exchange_sell,
+                                                  order_type = OrderType.LIMIT,
+                                                  trading_pair = pair)
+
+    def _take_opportunity_ts(self, pair: str, exchange_A: str, exchange_B: str, is_buy_A:bool, 
+                                   est_profit: float, amount: Decimal):
+        if is_buy_A:
+            exchange_buy = exchange_A
+            exchange_sell = exchange_B
+        else:
+            exchange_buy = exchange_B
+            exchange_sell = exchange_A
+        base_currency = pair.split('-')[0]
+        # balance check
+        if self.connectors[exchange_buy].get_balance("USDT") < self.quote_amount * 1.1:
+            self.logger().info(f"Insufficient USDT balance to buy {amount} {base_currency} on {exchange_buy}")
+            return
+        if self.connectors[exchange_sell].get_balance(base_currency) < float(amount) * 1.1:
+            self.logger().info(f"Insufficient {base_currency} balance to sell {amount} {base_currency} on {exchange_sell}")
+            return
+        # check whether the trade is in-balance / off-balance
+        if self.connectors[exchange_sell].get_balance(base_currency) < self.connectors[exchange_buy].get_balance(base_currency):
+            # base_asset off_balance and est_profit is less than off_balance_threshold -> ignore opportunity
+            if est_profit < self.arb_threshold["off_balance"]:
+                # self.logger().info(f"Not high enough profit for off_balance trading")
+                return
+        # run market orders
+        self._place_orders(base_amount = amount, pair = pair, exchange_buy = exchange_buy, exchange_sell = exchange_sell)
+        # update time stamp
+        ex_pair = f"{exchange_A}-{exchange_B}"
+        if self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] != 0:
+            self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] = time.time()
+
     def _update_opportunity_ts(self,
                                pair: str, 
                                profit: Decimal, vwap_prices: Dict[str, Any],
@@ -140,7 +226,7 @@ class SimpleArbitrage(ScriptStrategyBase):
                                                   "buy_b_sell_a":0, "profit_b_a":0,
                                                   "buy_price":0, "sell_price":0}
         if self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] == 0:
-            if profit >= self.arb_threshold:             # start_ts of the arbitrage opportunity
+            if profit >= self.arb_threshold["in_balance"]:             # start_ts of the arbitrage opportunity
                 self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] = time.time()
                 self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"] = profit
                 self.opportunity_ts[pair][ex_pair]["buy_price"] = vwap_prices[exchange_A]["ask"] if is_buy_A else vwap_prices[exchange_B]["ask"]
@@ -148,15 +234,21 @@ class SimpleArbitrage(ScriptStrategyBase):
             return ""
         else:
             duration = time.time() - self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"]
+            if profit > self.arb_threshold["in_balance"] and duration > self.duration_threshold:
+                if self.is_trade_on :
+                    # take opportunity
+                    base_amount = vwap_prices["order_amount"]
+                    self._take_opportunity_ts(pair = pair, est_profit = profit, amount = Decimal(base_amount),
+                                            exchange_A = exchange_A, exchange_B = exchange_B, is_buy_A = is_buy_A)
             if profit > self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"]:    # update max_profit and buy/sell_prices
                 self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"] = profit
                 self.opportunity_ts[pair][ex_pair]["buy_price"] = vwap_prices[exchange_A]["ask"] if is_buy_A else vwap_prices[exchange_B]["ask"]
                 self.opportunity_ts[pair][ex_pair]["sell_price"] = vwap_prices[exchange_B]["bid"] if is_buy_A else vwap_prices[exchange_A]["bid"]
-            if profit < self.arb_threshold:             # end_ts of the arbitrage opportunity
+            if profit < self.arb_threshold["in_balance"]:             # end_ts of the arbitrage opportunity
                 self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] = 0
                 max_profit = self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"]
                 self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"] = 0
-                if duration > self.duration_threshold:                      # log opportunity into sqlite3db and hb_logs
+                if duration > self.duration_threshold:          # log opportunity into sqlite3db and hb_logs
                     data = {"datetime": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                             "coin": pair,
                             "buy": exchange_A if is_buy_A else exchange_B,
@@ -189,10 +281,10 @@ class SimpleArbitrage(ScriptStrategyBase):
         avail_exchanges = [exchange for exchange in self.exchanges if pair in self.markets[exchange]]
         # initialize df for displaying profit_analysis
         columns = avail_exchanges.copy()
-        columns = ["BUY \ SELL (fee) |"]
+        columns = ["BUY -> SELL (Bal) |"]
         num_exchanges = len(avail_exchanges)
         data = [[' ' for _ in range(num_exchanges)] for _ in range(num_exchanges)]
-        
+        base_currency=pair.split('-')[0]
         # get analysis data 
         order_amount = self.quote_amount / self.connectors[avail_exchanges[0]].get_mid_price(trading_pair = pair)
         vwap_prices = self.get_vwap_prices_for_amount(amount = order_amount, pair = pair, exchanges = avail_exchanges)
@@ -220,14 +312,22 @@ class SimpleArbitrage(ScriptStrategyBase):
                                                                 profit = Decimal(buy_b_sell_a_profit),
                                                                 vwap_prices = vwap_prices,
                                                                 is_buy_A = False)
-                data[j][i] = f"{buy_b_sell_a_profit}({buy_b_sell_a_price if buy_b_sell_a_duration == '' else buy_b_sell_a_duration})"
-                data[i][j] = f"{buy_a_sell_b_profit}({buy_a_sell_b_price if buy_a_sell_b_duration == '' else buy_a_sell_b_duration})"
+                data[j][i] = f"{buy_b_sell_a_profit}({buy_b_sell_a_price if buy_b_sell_a_duration == '' else buy_b_sell_a_duration}) |"
+                data[i][j] = f"{buy_a_sell_b_profit}({buy_a_sell_b_price if buy_a_sell_b_duration == '' else buy_a_sell_b_duration}) |"
+        tot_base_balance = 0
+        tot_quote_balance = 0
         for i in range(num_exchanges):
             exchange = avail_exchanges[i]
-            columns.append(f"          {exchange} ({fee_rates[exchange] * 100:.1f}%)")
-            data[i].insert(0, f"{exchange} |")
+            base_balance = self.connectors[exchange].get_balance(base_currency)
+            quote_balance = self.connectors[exchange].get_balance('USDT')
+            tot_base_balance += base_balance
+            tot_quote_balance += quote_balance
+            columns.append(exchange.rjust(12) + f" ( {base_balance:8,.1f} ) |")
+            data[i].insert(0, exchange.rjust(9) + f"| {quote_balance:8,.1f} |")
         df = pd.DataFrame(data = data, columns = columns)
-        return df
+        return {"pd.DataFrame": df,
+                "tot_base_balance": tot_base_balance,
+                "tot_quote_balance": tot_quote_balance}
 
     def format_status(self) -> str:
         """
@@ -236,12 +336,25 @@ class SimpleArbitrage(ScriptStrategyBase):
         """
         if not self.ready_to_trade:
             return "Market connectors are not ready."
+        
         lines = []
         warning_lines = []
         warning_lines.extend(self.network_warning(self.get_market_trading_pair_tuples()))
+        # balance_df = self.get_balance_df()
+        # lines.extend(["", "  Balances:"] + ["    " + line for line in balance_df.to_string(
+        #                                                             index = False,
+        #                                                             formatters = [no_format, no_format, format_3digits, format_3digits]).split("\n")])
         for base in self.base_assets:
-            pair = f"{base}-USDT"
-            pair_profit_analysis_df = self.pair_profit_analysis_df(pair)
-            lines.extend(["", f"  {pair}:", "-"*21 + "+" + "-"*60] + \
+            pair_profit_analysis_data = self.pair_profit_analysis_df(f"{base}-USDT")
+            pair_profit_analysis_df = pair_profit_analysis_data["pd.DataFrame"]
+            tot_base_balance = pair_profit_analysis_data["tot_base_balance"]
+            tot_quote_balance = pair_profit_analysis_data["tot_quote_balance"]
+            init_base_balance = self.init_tot_balance[f"{base}-USDT"][base]
+            init_quote_balance = self.init_tot_balance[f"{base}-USDT"]["USDT"]
+            diff_base_balance = tot_base_balance - init_base_balance
+            diff_quote_balance = tot_quote_balance - init_quote_balance
+            header = f"{base}-USDT  |".rjust(25) + base.rjust(9) + f" : {tot_base_balance:9,.1f}({diff_base_balance:9,.1f})  || " + \
+                                                                   f" {tot_quote_balance:9,.1f}({diff_quote_balance:9,.1f})"
+            lines.extend(["", f"{header}", "-"*24 + "+" + "-"*27 + "+" + "-"*27 + "+" + "-"*27 ] + \
                      ["    " + line for line in pair_profit_analysis_df.to_string(index = False).split("\n")])
         return "\n".join(lines)

@@ -79,11 +79,12 @@ debug.log
 coverage.xml
 
 # misc
+*.csv
 *.srl
 *.key
 *.crt
 *.log
-*_log.db*
+*.db*
 # Debug console
 .debug_console_ssh_host_key
 
