@@ -102,7 +102,7 @@ class HistoryCommand:
         if display_report:
             self.notify(perf_summary_str)
             self.logger().info(perf_summary_str)
-            
+
         return perf_summary_str
 
     async def get_current_balances(self,  # type: HummingbotApplication
@@ -150,23 +150,27 @@ class HistoryCommand:
         # summarize the trading performance
         self.notify("\n  Performance Summary \n")
         perf_disp_lines = []
-        diff_base = {}
-        diff_quote = {}
-        tot_fees = {}
-        tot_perf = {}
+        perf_sum_cols = ['']
+        perf_sum_data = [['Trade_vol'], ['Diff_final'], ['Fee_quote'], ['Profit']]
+        tot_diff_quote = 0
         for symbol in perf_metrics:
-            perf_columns = ["Exchange", symbol.split('-')[0], "USDT"]
+            base_currency = symbol.split('-')[0]
+            perf_sum_cols.append(base_currency)
+            perf_columns = ["Exchange", base_currency, "USDT"]
             perf_data = []
-            diff_base[symbol] = 0
-            diff_quote[symbol] = 0
-            tot_fees[symbol] = 0
+            diff_base = 0
+            diff_quote = 0
+            tot_fees = 0
             cur_price = 0
+            tot_vol = 0
             for exchange in perf_metrics[symbol]:
-                diff_base[symbol] += float(perf_metrics[symbol][exchange]['buy']) + \
+                diff_base += float(perf_metrics[symbol][exchange]['buy']) + \
                                      float(perf_metrics[symbol][exchange]['sell'])
-                diff_quote[symbol] += float(perf_metrics[symbol][exchange]['buy_usdt']) + \
+                diff_quote += float(perf_metrics[symbol][exchange]['buy_usdt']) + \
                                       float(perf_metrics[symbol][exchange]['sell_usdt'])
-                tot_fees[symbol] -= float(perf_metrics[symbol][exchange]['fee_in_quote'])
+                tot_fees -= float(perf_metrics[symbol][exchange]['fee_in_quote'])
+                tot_vol += float(perf_metrics[symbol][exchange]['buy_usdt']) * -1 + \
+                           float(perf_metrics[symbol][exchange]['sell_usdt'])
                 cur_price = float(perf_metrics[symbol][exchange]['cur_price'])
                 perf_data.append([exchange, 
                              f"{perf_metrics[symbol][exchange]['buy']}", 
@@ -175,13 +179,28 @@ class HistoryCommand:
                              f"{perf_metrics[symbol][exchange]['sell']}", 
                              f"{perf_metrics[symbol][exchange]['sell_usdt']}"])
             perf_data.append(["---------", "---------", "---------"])
-            perf_data.append(["Tot_diff", diff_base[symbol], diff_quote[symbol]])
-            perf_data.append(["Tot_fee", "   *   ", tot_fees[symbol]])
-            tot_perf[symbol] = diff_base[symbol] * cur_price + diff_quote[symbol] + tot_fees[symbol]
-            perf_data.append(["Tot_perf", "   *   ", tot_perf[symbol]])
+            perf_data.append(["Tot_diff", diff_base, diff_quote])
+            perf_data.append(["Tot_fee", "   *   ", tot_fees])
+            tot_perf = diff_base * cur_price + diff_quote + tot_fees
+            perf_data.append(["Tot_perf", "   *   ", tot_perf])
 
+            perf_sum_data[0].append(tot_vol)
+            perf_sum_data[1].append(diff_base)
+            perf_sum_data[2].append(tot_fees)
+            perf_sum_data[3].append(tot_perf)
+            tot_diff_quote += diff_quote
+            
             perf_df = pd.DataFrame(data = perf_data, columns = perf_columns)
             perf_disp_lines.extend(["", symbol] + ["    " + line for line in perf_df.to_string(index=False).split("\n")])
+        
+        perf_sum_cols.append('Total')
+        perf_sum_data[0].append(sum(perf_sum_data[0][1:]))
+        perf_sum_data[1].append(tot_diff_quote)
+        perf_sum_data[2].append(sum(perf_sum_data[2][1:]))
+        perf_sum_data[3].append(sum(perf_sum_data[3][1:]))
+        perf_sum_df = pd.DataFrame(data = perf_sum_data, columns = perf_sum_cols)
+        perf_disp_lines.extend(["", "Performance Summary"] + ["    " + line for line in perf_sum_df.to_string(index=False).split("\n")])
+
         return "\n".join(perf_disp_lines)
 
     def report_performance_by_market(self,  # type: HummingbotApplication
