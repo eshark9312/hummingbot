@@ -407,13 +407,13 @@ class HtxExchange(ExchangePyBase):
         exchange_symbol = await self.exchange_symbol_associated_to_pair(trading_pair)
         params = {
             "account-id": self._account_id,
-            "amount": f"{amount:.4f}",
+            "amount": f"{amount:.5f}",
             "client-order-id": order_id,
             "symbol": exchange_symbol,
             "type": f"{side}-{order_type_str}",
         }
         if order_type is OrderType.LIMIT or order_type is OrderType.LIMIT_MAKER:
-            params["price"] = f"{price:.4f}"
+            params["price"] = f"{price:.5f}"
         creation_response = await self._api_post(path_url=path_url, params=params, data=params, is_auth_required=True)
 
         if (

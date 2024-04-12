@@ -34,6 +34,7 @@ class SimpleArbitrage(ScriptStrategyBase):
     arb_threshold = {"off_balance" : 0.7, "in_balance" : 0.5}           # threshold for take profit in percentage
     duration_threshold = 0.3            # threshold for duration of arb_opportunity to capture
     is_trade_on = True
+    is_processing_order = False
 
     quote_amount = 50
     base_assets = ["JOYSTREAM", "DECHAT", "TARA", "EGO"]
@@ -181,17 +182,9 @@ class SimpleArbitrage(ScriptStrategyBase):
                      order_type = OrderType.LIMIT,
                      trading_pair = pair)
 
-    def _balance_check_place_orders(self, base_amount: Decimal, exchange_buy: str, exchange_sell: str, pair:str):
+    def _place_orders(self, base_amount: Decimal, exchange_buy: str, exchange_sell: str, pair:str,
+                      exc_buy_quote_balance: float, exc_sell_base_balance: float):
         base_currency = pair.split('-')[0]
-        # balance check
-        exc_buy_quote_balance = float(self.connectors[exchange_buy].get_balance("USDT"))
-        exc_sell_base_balance = float(self.connectors[exchange_sell].get_balance(base_currency))
-        if exc_buy_quote_balance < float(self.quote_amount) * 2.2:
-            self.logger().info(f"{exchange_buy} : USDT insufficient to buy {base_amount} {base_currency}")
-            return
-        if exc_sell_base_balance < float(base_amount) * 2.2:
-            self.logger().info(f"{exchange_sell} : {base_currency} insufficient to sell {base_amount} {base_currency}")
-            return
         # get the limit price with slippage
         buy_price = Decimal(1.001) * self.connectors[exchange_buy].get_price_for_volume(
                                                 is_buy=True,
@@ -201,6 +194,8 @@ class SimpleArbitrage(ScriptStrategyBase):
                                                 is_buy=False,
                                                 volume=base_amount,
                                                 trading_pair=pair).result_price
+        orders = {"buy_order": {"exchange": exchange_buy}, 
+                  "sell_order": {"exchange": exchange_sell}}                                                
         orders["buy_order"]["order_id"] = self.buy(amount = base_amount, price = buy_price,
                                                   connector_name = exchange_buy,
                                                   order_type = OrderType.LIMIT,
@@ -213,17 +208,17 @@ class SimpleArbitrage(ScriptStrategyBase):
         log_data = {
                     'datetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'buy_exchange': exchange_buy,
-                'buy_usdt_bal': f"{exc_buy_quote_balance} USDT",
+                'buy_usdt_bal': f"{exc_buy_quote_balance:,.2f} USDT",
                'sell_exchange': exchange_sell,
-               'sell_base_bal': f"{exc_sell_base_balance} {base_currency}",
-             'order_buy_price': buy_price,
-            'order_sell_price': sell_price,
-           'order_base_amount': base_amount,
-                  'est_profit': est_profit}
+               'sell_base_bal': f"{exc_sell_base_balance:,.2f} {base_currency}",
+             'order_buy_price': f"{buy_price:.4f}",
+            'order_sell_price': f"{sell_price:.4f}",
+           'order_base_amount': f"{base_amount:.4f}",
+                  'est_profit': f"{est_profit:.2f}"}
         self._log_order_history_sqlite(log_data)
 
     def _take_opportunity_ts(self, pair: str, exchange_A: str, exchange_B: str, is_buy_A:bool, 
-                                   est_profit: float, amount: Decimal):
+                                   est_profit: float, base_amount: Decimal):
         if is_buy_A:
             exchange_buy = exchange_A
             exchange_sell = exchange_B
@@ -231,18 +226,28 @@ class SimpleArbitrage(ScriptStrategyBase):
             exchange_buy = exchange_B
             exchange_sell = exchange_A
         base_currency = pair.split('-')[0]
+        # balance check
+        exc_buy_quote_balance = float(self.connectors[exchange_buy].get_balance("USDT"))
+        exc_sell_base_balance = float(self.connectors[exchange_sell].get_balance(base_currency))
+        if exc_buy_quote_balance < float(self.quote_amount) * 2.2:
+            self.logger().info(f"{exchange_buy} : USDT insufficient to buy {base_amount} {base_currency}")
+            return
+        if exc_sell_base_balance < float(base_amount) * 2.2:
+            self.logger().info(f"{exchange_sell} : {base_currency} insufficient to sell {base_amount} {base_currency}")
+            return
         # check whether the trade is in-balance / off-balance
         if self.connectors[exchange_sell].get_balance(base_currency) < self.connectors[exchange_buy].get_balance(base_currency):
             # base_asset off_balance and est_profit is less than off_balance_threshold -> ignore opportunity
             if est_profit < self.arb_threshold["off_balance"]:
                 # self.logger().info(f"Not high enough profit for off_balance trading")
                 return
-        # check balance and place limit orders
-        self._balance_check_place_orders(base_amount = amount, pair = pair, exchange_buy = exchange_buy, exchange_sell = exchange_sell)
         # update time stamp
         ex_pair = f"{exchange_A}-{exchange_B}"
-        if self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] != 0:
-            self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] = time.time()
+        self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] = 0
+        # check balance and place limit orders
+        self._place_orders(base_amount = base_amount, pair = pair, 
+                           exchange_buy = exchange_buy, exchange_sell = exchange_sell,
+                           exc_buy_quote_balance = exc_buy_quote_balance, exc_sell_base_balance = exc_sell_base_balance)
 
     def _update_opportunity_ts(self,
                                pair: str, 
