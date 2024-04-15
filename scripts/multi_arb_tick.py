@@ -76,11 +76,13 @@ class SimpleArbitrage(ScriptStrategyBase):
 
     def on_tick(self):
         if not self.ready_to_trade:
-            pass
-        if self.init_tot_balance["initialized"]:
-            pass
-        else:
-            self._init_tot_balance()   
+            return
+        if not self.init_tot_balance["initialized"]:
+            self._init_tot_balance()
+            return
+        for base in self.base_assets:
+            self.pair_profit_analysis_tick(f"{base}-USDT")
+        return
 
     def _init_tot_balance(self):
         for base in self.base_assets:
@@ -196,25 +198,25 @@ class SimpleArbitrage(ScriptStrategyBase):
         # get the limit price with slippage
         buy_price = Decimal(1.001) * self.connectors[exchange_buy].get_price_for_volume(
                                                 is_buy=True,
-                                                volume=base_amount,
+                                                volume=base_amount * Decimal(1.2),
                                                 trading_pair=pair).result_price
         sell_price = Decimal(0.999) * self.connectors[exchange_sell].get_price_for_volume(
                                                 is_buy=False,
-                                                volume=base_amount,
+                                                volume=base_amount * Decimal(1.2),
                                                 trading_pair=pair).result_price
-        orders = {"buy_order": {"exchange": exchange_buy}, 
-                  "sell_order": {"exchange": exchange_sell}}                                                
+                                           
         est_profit = (sell_price - buy_price) / buy_price * 100
         if est_profit < 0:
             return
-        orders["buy_order"]["order_id"] = self.buy(amount = base_amount, price = buy_price,
-                                                  connector_name = exchange_buy,
-                                                  order_type = OrderType.LIMIT,
-                                                  trading_pair = pair)
-        orders["sell_order"]["order_id"] = self.sell(amount = base_amount, price = sell_price,
-                                                  connector_name = exchange_sell,
-                                                  order_type = OrderType.LIMIT,
-                                                  trading_pair = pair)
+        self.opportunity_ts[pair]["last"] = time.time()
+        self.buy(amount = base_amount, price = buy_price,
+                 connector_name = exchange_buy,
+                 order_type = OrderType.LIMIT,
+                 trading_pair = pair)
+        self.sell(amount = base_amount, price = sell_price,
+                  connector_name = exchange_sell,
+                  order_type = OrderType.LIMIT,
+                  trading_pair = pair)
         log_data = {
                     'datetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'buy_exchange': exchange_buy,
@@ -227,8 +229,9 @@ class SimpleArbitrage(ScriptStrategyBase):
                   'est_profit': f"{est_profit:.2f}"}
         self._log_order_history_sqlite(log_data)
 
-    def _take_opportunity_ts(self, pair: str, exchange_A: str, exchange_B: str, is_buy_A:bool, 
+    def _take_opportunity(self, pair: str, exchange_A: str, exchange_B: str, is_buy_A:bool, 
                                    est_profit: float, amount: Decimal):
+        pass
         if is_buy_A:
             exchange_buy = exchange_A
             exchange_sell = exchange_B
@@ -240,14 +243,14 @@ class SimpleArbitrage(ScriptStrategyBase):
         if self.connectors[exchange_sell].get_balance(base_currency) < self.connectors[exchange_buy].get_balance(base_currency):
             # base_asset off_balance and est_profit is less than off_balance_threshold -> ignore opportunity
             if est_profit < self.arb_threshold["off_balance"]:
-                # self.logger().info(f"Not high enough profit for off_balance trading")
                 return
-        # update time stamp
-        ex_pair = f"{exchange_A}-{exchange_B}"
-        self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"] = 0
-        self.opportunity_ts[pair]["last"] = time.time()
-        # check balance and place limit orders
-        self._balance_check_place_orders(base_amount = amount, pair = pair, exchange_buy = exchange_buy, exchange_sell = exchange_sell)
+        # update time stamp and trigger order
+        if time.time() - self.opportunity_ts[pair]["last"] > self.duration_threshold:
+            ex_pair = f"{exchange_A}-{exchange_B}"
+            duration = time.time() - self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"]
+            if duration > self.duration_threshold:
+                # check balance and place limit orders
+                self._balance_check_place_orders(base_amount = amount, pair = pair, exchange_buy = exchange_buy, exchange_sell = exchange_sell)
 
     def _update_opportunity_ts(self,
                                pair: str, 
@@ -267,14 +270,6 @@ class SimpleArbitrage(ScriptStrategyBase):
             return ""
         else:
             duration = time.time() - self.opportunity_ts[pair][ex_pair]["buy_a_sell_b" if is_buy_A else "buy_b_sell_a"]
-            since_last = time.time() - self.opportunity_ts[pair]["last"]
-
-            if profit > self.arb_threshold["in_balance"] and duration > self.duration_threshold:
-                if self.is_trade_on and since_last > self.duration_threshold:
-                    # take opportunity
-                    base_amount = vwap_prices["order_amount"]
-                    self._take_opportunity_ts(pair = pair, est_profit = profit, amount = Decimal(base_amount),
-                                            exchange_A = exchange_A, exchange_B = exchange_B, is_buy_A = is_buy_A)
             if profit > self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"]:    # update max_profit and buy/sell_prices
                 self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"] = profit
                 self.opportunity_ts[pair][ex_pair]["buy_price"] = vwap_prices[exchange_A]["ask"] if is_buy_A else vwap_prices[exchange_B]["ask"]
@@ -295,6 +290,7 @@ class SimpleArbitrage(ScriptStrategyBase):
                     self._log_orb_opportunity_sqlite(data)
                     info_msg = f"{pair} : {exchange_A} -> {exchange_B} {max_profit:.2f} % ({duration:.1f})" if is_buy_A else \
                                f"{pair} : {exchange_B} -> {exchange_A} {max_profit:.2f} % ({duration:.1f})"
+
                     self.logger().info(info_msg)
             return f"({duration:.1f})"
 
@@ -327,6 +323,32 @@ class SimpleArbitrage(ScriptStrategyBase):
                             data['order_base_amount'],
                             data['est_profit']))
         self.sqlite_conn.commit()
+
+    def pair_profit_analysis_tick(self, pair: str):
+        avail_exchanges = [exchange for exchange in self.exchanges if pair in self.markets[exchange]]
+        num_exchanges = len(avail_exchanges)
+        # get analysis data 
+        order_amount = self.quote_amount / self.connectors[avail_exchanges[0]].get_mid_price(trading_pair = pair)
+        vwap_prices = self.get_vwap_prices_for_amount(amount = order_amount, pair = pair, exchanges = avail_exchanges)
+        fee_rates = self.get_fees_percentages(amount = order_amount, pair = pair, exchanges = avail_exchanges)
+        for i in range(num_exchanges):
+            for j in range(i + 1, num_exchanges):
+                exchange_A = avail_exchanges[i]
+                exchange_B = avail_exchanges[j]
+                profitability_analysis = self.get_profitability_analysis(
+                                                vwap_prices = vwap_prices,
+                                                fee_rates = fee_rates,
+                                                exchange_A = exchange_A,
+                                                exchange_B = exchange_B)
+                buy_a_sell_b_profit = profitability_analysis['buy_a_sell_b']['profitability_pct'] * 100
+                buy_b_sell_a_profit = profitability_analysis['buy_b_sell_a']['profitability_pct'] * 100
+                base_amount = vwap_prices["order_amount"]
+                if buy_a_sell_b_profit > self.arb_threshold["in_balance"]:
+                    self._take_opportunity(pair = pair, est_profit = buy_a_sell_b_profit, amount = Decimal(base_amount),
+                                              exchange_A = exchange_A, exchange_B = exchange_B, is_buy_A = True)
+                if buy_b_sell_a_profit > self.arb_threshold["in_balance"]:
+                    self._take_opportunity(pair = pair, est_profit = buy_b_sell_a_profit, amount = Decimal(base_amount),
+                                              exchange_A = exchange_A, exchange_B = exchange_B, is_buy_A = False)
 
     def pair_profit_analysis_df(self, pair: str):
         avail_exchanges = [exchange for exchange in self.exchanges if pair in self.markets[exchange]]
