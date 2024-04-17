@@ -30,22 +30,23 @@ class SimpleArbitrage(ScriptStrategyBase):
     A simplified version of Hummingbot arbitrage strategy, this bot checks the Volume Weighted Average Price for
     bid and ask in two exchanges and if it finds a profitable opportunity, it will trade the tokens.
     """
-    exchanges = ["mexc", "gate_io", "kucoin", "htx"]
+    exchanges = ["mexc", "gate_io", "kucoin", "htx", "binance"]
     arb_threshold = {"off_balance" : 0.7, "in_balance" : 0.5}           # threshold for take profit in percentage
     duration_threshold = 0.3            # threshold for duration of arb_opportunity to capture
     is_trade_on = True
     is_processing_order = False
 
-    quote_amount = 50
-    base_assets = ["JOYSTREAM", "DECHAT", "TARA", "EGO", "SERSH"]
-    markets = {"mexc": {"MX-USDT", "DECHAT-USDT", "JOYSTREAM-USDT", "EGO-USDT", "TARA-USDT", "SERSH-USDT"},
-               "kucoin": {"EGO-USDT", "DECHAT-USDT"},
-               "gate_io": {"DECHAT-USDT", "JOYSTREAM-USDT", "TARA-USDT", "SERSH-USDT"},
-               "htx": {"DECHAT-USDT"}}
+    quote_amount = 150
+    base_assets = ["FTM", "ADA", "XDC", "RITE", "SERSH"]
+    markets = {"mexc": {"XDC-USDT", "RITE-USDT", "SERSH-USDT"},
+             "kucoin": {"ADA-USDT", "FTM-USDT", "XDC-USDT"},
+            "gate_io": {"ADA-USDT", "FTM-USDT", "XDC-USDT", "RITE-USDT", "SERSH-USDT"},
+                "htx": {"ADA-USDT", "FTM-USDT", "XDC-USDT"},
+            "binance": {"ADA-USDT", "FTM-USDT"}}
     opportunity_ts = {f"{base}-USDT": {"last": 0} for base in base_assets}
     init_tot_balance = {f"{base}-USDT": {base:0, "USDT":0} for base in base_assets}
     init_tot_balance["initialized"] = False
-    sqlite_conn = sqlite3.connect('opportunity_log_0329.db')
+    sqlite_conn = sqlite3.connect('arb_oppor_log_0416.db')
     tb_opportunity_name = "multi_arb_tick_04_15"
     tb_order_log_name = "order_log_tick_04_15"
     # initialize the db
@@ -80,9 +81,10 @@ class SimpleArbitrage(ScriptStrategyBase):
         if not self.init_tot_balance["initialized"]:
             self._init_tot_balance()
             return
-        for base in self.base_assets:
-            self.pair_profit_analysis_tick(f"{base}-USDT")
         return
+        # for base in self.base_assets:
+        #     self.pair_profit_analysis_tick(f"{base}-USDT")
+        # return
 
     def _init_tot_balance(self):
         for base in self.base_assets:
