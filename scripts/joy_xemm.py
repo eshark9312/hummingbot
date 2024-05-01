@@ -28,7 +28,7 @@ class SimpleXEMM(ScriptStrategyBase):
     quote_asset = "USDT"
     base_asset = "JOYSTREAM"
 
-    order_amount = 1216.19              # amount for each order
+    order_amount = 2022.05              # amount for each order
     spread_bps = 100                    # bot places maker orders at this spread to taker price in percent
     min_spread_bps = 40                 # bot refreshes order if spread is lower than min-spread
     slippage_buffer_spread_bps = 30     # buffer applied to limit taker hedging trades on taker exchange

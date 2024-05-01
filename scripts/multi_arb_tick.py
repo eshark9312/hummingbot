@@ -37,15 +37,15 @@ class SimpleArbitrage(ScriptStrategyBase):
     is_processing_order = False
 
     quote_amount = 50
-    base_assets = ["JOYSTREAM", "DECHAT", "TARA", "EGO", "SERSH"]
-    markets = {"mexc": {"MX-USDT", "DECHAT-USDT", "JOYSTREAM-USDT", "EGO-USDT", "TARA-USDT", "SERSH-USDT"},
+    base_assets = ["JOYSTREAM", "DECHAT", "TARA", "EGO"]
+    markets = {"mexc": {"DECHAT-USDT", "JOYSTREAM-USDT", "EGO-USDT", "TARA-USDT"},
                "kucoin": {"EGO-USDT", "DECHAT-USDT"},
-               "gate_io": {"DECHAT-USDT", "JOYSTREAM-USDT", "TARA-USDT", "SERSH-USDT"},
+               "gate_io": {"DECHAT-USDT", "JOYSTREAM-USDT", "TARA-USDT"},
                "htx": {"DECHAT-USDT"}}
     opportunity_ts = {f"{base}-USDT": {"last": 0} for base in base_assets}
     init_tot_balance = {f"{base}-USDT": {base:0, "USDT":0} for base in base_assets}
     init_tot_balance["initialized"] = False
-    sqlite_conn = sqlite3.connect('opportunity_log_0329.db')
+    sqlite_conn = sqlite3.connect('opportunity_log_0428.db')
     tb_opportunity_name = "multi_arb_tick_04_15"
     tb_order_log_name = "order_log_tick_04_15"
     # initialize the db
@@ -196,11 +196,11 @@ class SimpleArbitrage(ScriptStrategyBase):
             self.logger().info(f"{exchange_sell} : {base_currency} insufficient to sell {base_amount} {base_currency}")
             return
         # get the limit price with slippage
-        buy_price = Decimal(1.001) * self.connectors[exchange_buy].get_price_for_volume(
+        buy_price = Decimal(1.002) * self.connectors[exchange_buy].get_price_for_volume(
                                                 is_buy=True,
                                                 volume=base_amount * Decimal(1.2),
                                                 trading_pair=pair).result_price
-        sell_price = Decimal(0.999) * self.connectors[exchange_sell].get_price_for_volume(
+        sell_price = Decimal(0.998) * self.connectors[exchange_sell].get_price_for_volume(
                                                 is_buy=False,
                                                 volume=base_amount * Decimal(1.2),
                                                 trading_pair=pair).result_price
@@ -218,7 +218,7 @@ class SimpleArbitrage(ScriptStrategyBase):
                   order_type = OrderType.LIMIT,
                   trading_pair = pair)
         log_data = {
-                    'datetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'datetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-4],
                 'buy_exchange': exchange_buy,
                 'buy_usdt_bal': f"{exc_buy_quote_balance:,.2f} USDT",
                'sell_exchange': exchange_sell,
@@ -279,7 +279,7 @@ class SimpleArbitrage(ScriptStrategyBase):
                 max_profit = self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"]
                 self.opportunity_ts[pair][ex_pair]["profit_a_b" if is_buy_A else "profit_b_a"] = 0
                 if duration > self.duration_threshold:          # log opportunity into sqlite3db and hb_logs
-                    data = {"datetime": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    data = {"datetime": datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-4],
                             "coin": pair,
                             "buy": exchange_A if is_buy_A else exchange_B,
                             "sell": exchange_B if is_buy_A else exchange_A,

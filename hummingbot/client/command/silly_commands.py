@@ -15,6 +15,7 @@ class SillyCommands:
     def be_silly(self,  # type: HummingbotApplication
                  raw_command: str) -> bool:
         command = raw_command.split(" ")[0]
+        self.notify(raw_command)
         if command == "hummingbot":
             safe_ensure_future(self.silly_hummingbot())
             return True
@@ -35,6 +36,14 @@ class SillyCommands:
             return True
         elif command == "dennis":
             safe_ensure_future(self.silly_dennis())
+            return True
+        elif command == "histarb":
+            # retrieve optional arguments
+            if "--days" in raw_command:
+                days = float(raw_command.split("--days")[1].strip().split(' ')[0])
+            else:
+                days = -1    
+            safe_ensure_future(self.silly_histarb(days = days))
             return True
         else:
             return False
@@ -187,6 +196,13 @@ class SillyCommands:
         self.placeholder_mode = False
         self.app.hide_input = False
 
+    async def silly_histarb(self, days: float = -1):
+        if days > 0:
+            self.histarb(days = days)
+        else:
+            self.histarb()
+        await asyncio.sleep(1)
+
     async def cls_display_delay(self, lines, delay=0.5):
         self.app.output_field.buffer.save_to_undo_stack()
         self.app.log("".join(lines), save_log=False)
@@ -197,6 +213,7 @@ class SillyCommands:
         if self.app.live_updates is True:
             self.app.live_updates = False
             await asyncio.sleep(1)
+
 
     def display_alert(self, custom_alert = None):
         alert = """

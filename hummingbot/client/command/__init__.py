@@ -18,7 +18,7 @@ from .start_command import StartCommand
 from .status_command import StatusCommand
 from .stop_command import StopCommand
 from .ticker_command import TickerCommand
-
+from .histarb_command import HistarbCommand
 __all__ = [
     BalanceCommand,
     ConfigCommand,
@@ -29,6 +29,7 @@ __all__ = [
     GatewayCommand,
     HelpCommand,
     HistoryCommand,
+    HistarbCommand,
     ImportCommand,
     OrderBookCommand,
     PMMScriptCommand,
